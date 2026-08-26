@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Turnero TV • Supabase • vFinal Crypto Fix</title>
+  <title>Turnero TV • Supabase</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
   <style>
     :root{--purple:#7b2cff;--purple2:#a34cff;--ink:#241833;--muted:#756a83;--bg:#f5f2fb;--card:#fff;--line:#e4ddee;--ok:#1f9d69;--danger:#d63c4c;}
     *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}
@@ -25,6 +26,21 @@
     .advisor-call{min-height:calc(100vh - 63px);display:grid;place-items:center;padding:22px}.advisor-card{width:min(850px,100%)}.current{background:#1d1430;color:#fff;border-radius:22px;padding:24px;text-align:center}.current .t{font-size:88px;font-weight:1000}.current .m{font-size:44px;font-weight:1000}.two-buttons{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.two-buttons .btn{font-size:18px;padding:18px}
     .toast{position:fixed;right:18px;bottom:18px;z-index:100;background:#1b1624;color:#fff;padding:12px 14px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.22);max-width:360px}.small-note{font-size:12px;color:var(--muted)}
     .preview-media{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.media-card{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}.media-card img,.media-card video{display:block;width:100%;height:140px;object-fit:cover}.media-card .cap{padding:8px;font-size:12px}
+    .ticket-print{display:none}
+    @media print{
+      @page{size:58mm auto;margin:0}
+      html,body{width:58mm;margin:0;padding:0;background:#fff}
+      body *{visibility:hidden!important}
+      #ticketPrint,.ticket-print,.ticket-print *{visibility:visible!important}
+      #ticketPrint{display:block!important;position:absolute;left:0;top:0;width:58mm}
+      .ticket-paper{width:58mm;padding:4mm 3mm;font-family:monospace;color:#000;text-align:center}
+      .ticket-paper .brand{font-size:18px;font-weight:900;margin-bottom:3mm}
+      .ticket-paper .label{font-size:12px}
+      .ticket-paper .turn{font-size:34px;font-weight:900;line-height:1.05;margin:2mm 0}
+      .ticket-paper .cat{font-size:18px;font-weight:900}
+      .ticket-paper .date{font-size:10px;margin-top:3mm}
+      .ticket-paper .sep{border-top:1px dashed #000;margin:3mm 0}
+    }
     @media(max-width:1000px){.grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}.tv-main{grid-template-columns:1fr}.history-grid{grid-template-columns:repeat(3,1fr)}}
     @media(max-width:720px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.nav{display:none}.wrap{padding:14px}.tv-header,.tv-main,.tv-history{padding-left:14px;padding-right:14px}.history-grid{grid-template-columns:repeat(2,1fr)}.two-buttons{grid-template-columns:1fr}.called-card,.ad-frame{min-height:320px}.tv-logo{font-size:22px}.clock{font-size:18px}}
   </style>
@@ -32,10 +48,17 @@
 <body>
 <div id="app"></div>
 <div id="toast" class="toast hidden"></div>
+<div id="ticketPrint" class="ticket-print" aria-hidden="true"></div>
 <script>
 const SUPABASE_URL = 'https://enhcaykgpgxzsltgkujz.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVuaGNheWtncGd4enNsdGdrdWp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NTYwMDMsImV4cCI6MjEwMzMzMjAwM30.w6iWEAQoBJFBjJb08IKNuxG3zmI9IA1AMoWzfjKd6mA';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Deja vacío para usar la impresora predeterminada del sistema.
+// Si tienes varias impresoras, escribe aquí el nombre exacto de la térmica de 58 mm.
+const THERMAL_PRINTER_NAME = '';
+let qzReadyPromise = null;
+const printedTurns = new Set();
+
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
 let toastTimer;
@@ -76,11 +99,103 @@ async function createAgent(e){e.preventDefault();try{await rpc('admin_create_age
 async function uploadMedia(e){e.preventDefault();const file=document.getElementById('mediaFile').files[0];if(!file)return;try{const token=crypto.randomUUID();const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');const path=`${token}_${safe}`;const {error}=await sb.storage.from('turnero-media').upload(path,file,{upsert:false,contentType:file.type});if(error)throw error;const {data:{publicUrl}}=sb.storage.from('turnero-media').getPublicUrl(path);const kind=file.type.startsWith('video/')?'video':'image';await rpc('admin_add_media',{p_session:sessionGet('admin').token,p_title:document.getElementById('mediaTitle').value.trim()||file.name,p_kind:kind,p_url:publicUrl,p_path:path});toast('Publicidad subida');loadAdmin()}catch(err){toast(err.message||'No se pudo subir')}}
 
 
+async function ensureQz(){
+  if (!window.qz) throw new Error('QZ Tray no está cargado');
+  if (!qzReadyPromise){
+    qzReadyPromise = (async()=>{
+      if (!qz.websocket.isActive()) await qz.websocket.connect();
+      return true;
+    })().catch(err=>{qzReadyPromise=null;throw err;});
+  }
+  return qzReadyPromise;
+}
+
+function escEscPosText(text){
+  return String(text||'')
+    .replace(/\\/g,'\\\\')
+    .replace(/\r/g,'')
+    .replace(/\n/g,'\\n');
+}
+
+async function printTurnThermal(turn){
+  const key = `${turn.category_code}-${turn.number}`;
+  if (printedTurns.has(key)) return {ok:true,duplicate:true};
+  printedTurns.add(key);
+
+  const now = new Date();
+  const dateText = now.toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'});
+  const category = String(turn.category_code ?? '');
+  const number = String(turn.number ?? '');
+  const turnText = `${category} ${number}`;
+
+  // Primer intento: QZ Tray, que permite impresión directa sin mostrar el diálogo del navegador.
+  try{
+    await ensureQz();
+    let printer = THERMAL_PRINTER_NAME.trim();
+    if (!printer) printer = await qz.printers.getDefault();
+    if (!printer) throw new Error('No hay impresora predeterminada');
+
+    const cfg = qz.configs.create(printer, {
+      copies: 1,
+      density: 203,
+      encoding: 'CP858',
+      units: 'mm',
+      size: {width:58, height:0}
+    });
+
+    const cmds = [
+      '\x1B\x40',
+      '\x1B\x61\x01',
+      '\x1B\x45\x01',
+      'TURNERO\n',
+      '\x1B\x45\x00',
+      '==============================\n',
+      'SU TURNO ES\n',
+      '\x1B\x21\x30',
+      `${turnText}\n`,
+      '\x1B\x21\x00',
+      '==============================\n',
+      `Fecha: ${dateText}\n`,
+      'Espere a ser llamado.\n',
+      '\n\n\n',
+      '\x1D\x56\x00'
+    ];
+    await qz.print(cfg, [{type:'raw',format:'command',data:cmds.join('')}]);
+    return {ok:true,method:'qz',printer};
+  }catch(err){
+    // Segundo intento: impresión del navegador. Funciona sin instalar nada,
+    // pero el navegador puede mostrar el cuadro de impresión salvo en modo kiosco.
+    try{
+      const ticket = document.getElementById('ticketPrint');
+      ticket.innerHTML = `<div class="ticket-paper"><div class="brand">TURNERO</div><div class="sep"></div><div class="label">SU TURNO ES</div><div class="turn">${esc(category)} ${esc(number)}</div><div class="sep"></div><div class="date">${esc(dateText)}</div><div class="date">Espere a ser llamado.</div></div>`;
+      const printWin = window.open('', '_blank', 'width=320,height=500');
+      if (printWin){
+        printWin.document.write(`<!doctype html><html><head><title>Turno ${esc(turnText)}</title><style>@page{size:58mm auto;margin:0}html,body{margin:0;padding:0;width:58mm}.ticket-paper{width:58mm;padding:4mm 3mm;font-family:monospace;color:#000;text-align:center}.brand{font-size:18px;font-weight:900;margin-bottom:3mm}.label{font-size:12px}.turn{font-size:34px;font-weight:900;line-height:1.05;margin:2mm 0}.date{font-size:10px;margin-top:3mm}.sep{border-top:1px dashed #000;margin:3mm 0}</style></head><body>${ticket.innerHTML}</body></html>`);
+        printWin.document.close();
+        printWin.focus();
+        setTimeout(()=>{try{printWin.print()}finally{setTimeout(()=>printWin.close(),800)}},150);
+        return {ok:true,method:'browser-fallback',warning:err?.message||'QZ Tray no disponible'};
+      }
+      throw err;
+    }catch(fallbackErr){
+      printedTurns.delete(key);
+      throw new Error('No se pudo imprimir. Instala QZ Tray para impresión térmica automática de 58 mm.');
+    }
+  }
+}
+
+async function testThermalPrinter(){
+  try{
+    const result = await printTurnThermal({category_code:'PRUEBA',number:'001'});
+    toast(result.method==='qz'?`Prueba enviada a ${result.printer}`:'Se abrió la impresión del navegador');
+  }catch(e){toast(e.message||'No se pudo probar la impresora');}
+}
+
 function renderKiosk(){
-  app.innerHTML=nav('kiosco')+`<main class="wrap"><div class="section-head"><div><h1>Toma de turno</h1><p class="muted">Selecciona el servicio que necesitas.</p></div><button class="btn secondary" onclick="location.hash='tv'">Ver pantalla TV</button></div><section class="panel"><div id="kioskCats" class="grid grid-3"><div class="muted">Cargando categorías…</div></div></section></main>`;loadKiosk();
+  app.innerHTML=nav('kiosco')+`<main class="wrap"><div class="section-head"><div><h1>Toma de turno</h1><p class="muted">Selecciona el servicio que necesitas.</p></div><div class="actions"><button class="btn secondary" onclick="testThermalPrinter()">Probar impresora</button><button class="btn secondary" onclick="location.hash='tv'">Ver pantalla TV</button></div></div><section class="panel" style="margin-bottom:14px"><div class="small-note"><strong>Impresión automática:</strong> para imprimir directamente en una térmica de 58 mm sin mostrar el cuadro de impresión, instala <strong>QZ Tray</strong> en el PC del kiosco. La app usará la impresora predeterminada del sistema, o la que indiques en <code>THERMAL_PRINTER_NAME</code>.</div></section><section class="panel"><div id="kioskCats" class="grid grid-3"><div class="muted">Cargando categorías…</div></div></section></main>`;loadKiosk();
 }
 async function loadKiosk(){try{const d=await rpc('public_categories',{});const box=document.getElementById('kioskCats');box.innerHTML=(d||[]).map(c=>`<button class="panel" style="text-align:left;border:2px solid #eadff6" onclick="issuePublicTurn('${esc(c.code)}')"><div style="font-size:34px;font-weight:1000;color:var(--purple)">${esc(c.code)}</div><div style="font-weight:900">${esc(c.name)}</div><div class="small-note">Tocar para tomar turno</div></button>`).join('')||'<div class="muted">No hay categorías activas.</div>'}catch(e){document.getElementById('kioskCats').innerHTML='<div class="muted">No se pudieron cargar las categorías.</div>'}}
-async function issuePublicTurn(code){try{const r=await rpc('issue_turn',{p_code:code});alert(`Tu turno es ${r.category_code} ${r.number}. Por favor espera a ser llamado.`)}catch(e){alert(e.message||'No fue posible generar el turno')}}
+async function issuePublicTurn(code){try{const r=await rpc('issue_turn',{p_code:code});toast(`Turno generado: ${r.category_code} ${r.number}`);try{await printTurnThermal(r)}catch(printErr){toast(printErr.message||'Turno generado, pero no se pudo imprimir')} }catch(e){toast(e.message||'No fue posible generar el turno')}}
 
 function renderAdvisor(){const s=sessionGet('advisor');if(!s){renderAdvisorLogin();return}app.innerHTML=nav('asesor')+`<main class="advisor-call"><section class="panel advisor-card"><div class="section-head"><div><h1>Módulo ${esc(s.module_number)}</h1><p class="muted">${esc(s.name)} · ${s.mode==='exclusive'?'Categoría exclusiva':'Atención aleatoria'}</p></div><button class="btn secondary" onclick="advisorLogout()">Salir</button></div><div class="current"><div>Último llamado</div><div id="advisorCurrent" class="t">—</div><div id="advisorCurrentM" class="m">Módulo ${esc(s.module_number)}</div></div><div class="two-buttons"><button class="btn ok" onclick="callNext(true)">Llamar siguiente de mi categoría</button><button class="btn" onclick="callNext(false)">Llamar siguiente de cualquier categoría</button></div><p class="small-note" style="margin-top:12px">El turno se reserva de forma segura en Supabase para evitar que dos módulos llamen el mismo turno.</p><div id="advisorMsg" class="small-note"></div></section></main>`;pollAdvisor();setInterval(pollAdvisor,1800)}
 function renderAdvisorLogin(){app.innerHTML=nav('asesor')+`<main class="login"><section class="panel login-card"><h2>Acceso asesor / módulo</h2><p class="muted">Usa el número de módulo y la contraseña de 4 dígitos creada por el administrador.</p><form id="advisorLogin"><div class="field"><label>Módulo</label><input id="advMod" inputmode="text" required></div><div class="field"><label>Contraseña</label><input id="advPass" type="password" inputmode="numeric" maxlength="4" pattern="\\d{4}" required></div><button class="btn" style="width:100%">Entrar</button></form></section></main>`;document.getElementById('advisorLogin').onsubmit=async e=>{e.preventDefault();try{const r=await rpc('login_agent',{p_module_number:document.getElementById('advMod').value.trim(),p_password:document.getElementById('advPass').value.trim()});sessionSet('advisor',r);toast('Acceso correcto');renderAdvisor()}catch(err){toast('Módulo o contraseña no válidos')}}}
