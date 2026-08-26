@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Turnero TV • Supabase</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsrsasign/11.1.0/jsrsasign-all-min.js"></script>
   <style>
     :root{--purple:#7b2cff;--purple2:#a34cff;--ink:#241833;--muted:#756a83;--bg:#f5f2fb;--card:#fff;--line:#e4ddee;--ok:#1f9d69;--danger:#d63c4c;}
     *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}
@@ -54,10 +52,6 @@
 const SUPABASE_URL = 'https://enhcaykgpgxzsltgkujz.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVuaGNheWtncGd4enNsdGdrdWp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NTYwMDMsImV4cCI6MjEwMzMzMjAwM30.w6iWEAQoBJFBjJb08IKNuxG3zmI9IA1AMoWzfjKd6mA';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-// Deja vacío para usar la impresora predeterminada del sistema.
-// Si tienes varias impresoras, escribe aquí el nombre exacto de la térmica de 58 mm.
-const THERMAL_PRINTER_NAME = '';
-
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
 let toastTimer;
@@ -98,176 +92,26 @@ async function createAgent(e){e.preventDefault();try{await rpc('admin_create_age
 async function uploadMedia(e){e.preventDefault();const file=document.getElementById('mediaFile').files[0];if(!file)return;try{const token=crypto.randomUUID();const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');const path=`${token}_${safe}`;const {error}=await sb.storage.from('turnero-media').upload(path,file,{upsert:false,contentType:file.type});if(error)throw error;const {data:{publicUrl}}=sb.storage.from('turnero-media').getPublicUrl(path);const kind=file.type.startsWith('video/')?'video':'image';await rpc('admin_add_media',{p_session:sessionGet('admin').token,p_title:document.getElementById('mediaTitle').value.trim()||file.name,p_kind:kind,p_url:publicUrl,p_path:path});toast('Publicidad subida');loadAdmin()}catch(err){toast(err.message||'No se pudo subir')}}
 
 
-// ===== Impresión térmica 58 mm con QZ Tray =====
-// IMPORTANTE: para impresión silenciosa QZ requiere mensajes firmados.
-// Coloca en la carpeta del proyecto:
-//   assets/qz/digital-certificate.txt
-//   assets/qz/private-key.pem
-// Esas llaves pueden generarse desde QZ Tray > Advanced > Site Manager > + > Create New.
-let qzReadyPromise = null;
-let qzPrinterName = '';
-const printedTurns = new Set();
-
-async function loadTextAsset(url){
-  const r = await fetch(url, {cache:'no-store'});
-  if(!r.ok) throw new Error(`No se pudo cargar ${url} (HTTP ${r.status})`);
-  return await r.text();
+// ===== Impresión normal del navegador para ticket térmico 58 mm =====
+function renderKiosk(){
+  app.innerHTML=nav('kiosco')+`<main class="wrap"><div class="section-head"><div><h1>Toma de turno</h1><p class="muted">Selecciona el servicio que necesitas.</p></div><div class="actions"><button class="btn secondary" onclick="location.hash='tv'">Ver pantalla TV</button></div></div><section class="panel" style="margin-bottom:14px"><div class="small-note"><strong>Impresión térmica 58 mm:</strong> al tomar un turno se abrirá el cuadro de impresión normal del navegador. Selecciona la impresora térmica y pulsa <strong>Imprimir</strong>.</div></section><section class="panel"><div id="kioskCats" class="grid grid-3"><div class="muted">Cargando categorías…</div></div></section></main>`;loadKiosk();
 }
-
-function configureQzSecurity(){
-  if(!window.qz) return false;
-  if(!window.KJUR || !window.KEYUTIL) throw new Error('No se cargó el componente de firma de QZ (jsrsasign).');
-  if(window.__turneroQzSecurity) return true;
-  qz.security.setCertificatePromise(function(resolve, reject){
-    loadTextAsset('assets/qz/digital-certificate.txt').then(resolve).catch(reject);
-  });
-  qz.security.setSignatureAlgorithm('SHA512');
-  qz.security.setSignaturePromise(function(toSign){
-    return function(resolve, reject){
-      loadTextAsset('assets/qz/private-key.pem').then(function(pem){
-        try{
-          const pk = KEYUTIL.getKey(pem);
-          const sig = new KJUR.crypto.Signature({alg:'SHA512withRSA'});
-          sig.init(pk);
-          sig.updateString(toSign);
-          resolve(hexToBase64(sig.sign()));
-        }catch(err){ reject(err); }
-      }).catch(reject);
-    };
-  });
-  window.__turneroQzSecurity = true;
-  return true;
-}
-
-function hexToBase64(hex){
-  let out='';
-  for(let i=0;i<hex.length;i+=2) out += String.fromCharCode(parseInt(hex.substr(i,2),16));
-  return btoa(out);
-}
-
-async function ensureQz(){
-  if(!window.qz) throw new Error('QZ Tray no está cargado. Comprueba que QZ Tray esté instalado y ejecutándose.');
-  if(location.protocol === 'file:') throw new Error('No abras el HTML con doble clic. Inicia el servidor local y abre http://localhost:8080/.');
-  configureQzSecurity();
-  if(!qzReadyPromise){
-    qzReadyPromise = (async()=>{
-      if(!qz.websocket.isActive()){
-        // Primero probamos WSS. Esto evita el bloqueo de Chrome 147+ a websockets
-        // inseguros (ws://) hacia localhost/otras direcciones privadas.
-        try {
-          if(qz.api && qz.api.showDebug) qz.api.showDebug(true);
-          await qz.websocket.connect({
-            host: 'localhost',
-            usingSecure: true,
-            retries: 3,
-            delay: 1
-          });
-        } catch(secureErr){
-          // Respaldo para instalaciones antiguas que solo exponen ws://.
-          try {
-            await qz.websocket.connect({
-              host: 'localhost',
-              usingSecure: false,
-              retries: 2,
-              delay: 1
-            });
-          } catch(insecureErr){
-            const a = secureErr?.message || String(secureErr);
-            const b = insecureErr?.message || String(insecureErr);
-            throw new Error(
-              'No se pudo conectar con QZ Tray. ' +
-              'Intento seguro: ' + a + ' | Intento HTTP: ' + b +
-              '. Verifica que QZ Tray esté ejecutándose y que el navegador permita localhost.'
-            );
-          }
-        }
-      }
-      const info = qz.websocket.getConnectionInfo ? qz.websocket.getConnectionInfo() : null;
-      qzPrinterName = THERMAL_PRINTER_NAME.trim() || await qz.printers.getDefault();
-      if(!qzPrinterName) throw new Error('QZ Tray está conectado pero no hay impresora predeterminada.');
-      if(info) console.info('QZ Tray conectado:', info);
-      return qzPrinterName;
-    })().catch(err=>{qzReadyPromise=null;throw err;});
-  }
-  return qzReadyPromise;
-}
-
-function escEscPosText(text){
-  return String(text||'').replace(/\\/g,'\\\\').replace(/[\r]/g,'').replace(/[\n]/g,'\\n');
-}
-
-function buildEscPos(turn){
+async function loadKiosk(){try{const d=await rpc('public_categories',{});const box=document.getElementById('kioskCats');box.innerHTML=(d||[]).map(c=>`<button class="panel" style="text-align:left;border:2px solid #eadff6" onclick="issuePublicTurn('${esc(c.code)}')"><div style="font-size:34px;font-weight:1000;color:var(--purple)">${esc(c.code)}</div><div style="font-weight:900">${esc(c.name)}</div><div class="small-note">Tocar para tomar turno e imprimir</div></button>`).join('')||'<div class="muted">No hay categorías activas.</div>'}catch(e){document.getElementById('kioskCats').innerHTML='<div class="muted">No se pudieron cargar las categorías.</div>'}}
+function buildPrintTicket(turn){
   const now=new Date();
   const dateText=now.toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'});
-  const category=String(turn.category_code??'');
-  const number=String(turn.number??'');
-  const turnText=`${category} ${number}`;
-  return [
-    '\x1B\x40',              // init
-    '\x1B\x61\x01',         // center
-    '\x1B\x45\x01',         // bold on
-    'TURNERO\n',
-    '\x1B\x45\x00',
-    '--------------------------------\n',
-    'SU TURNO ES\n',
-    '\x1B\x21\x38',         // doble alto/ancho aproximado
-    `${turnText}\n`,
-    '\x1B\x21\x00',
-    '--------------------------------\n',
-    `Fecha: ${escEscPosText(dateText)}\n`,
-    'Espere a ser llamado.\n',
-    '\n\n\n',
-    '\x1D\x56\x00'           // corte
-  ].join('');
+  const box=document.getElementById('ticketPrint');
+  box.innerHTML=`<div class="ticket-paper"><div class="brand">TURNERO</div><div class="label">SU TURNO ES</div><div class="turn">${esc(turn.category_code)} ${esc(turn.number)}</div><div class="label">Por favor espere su llamado</div><div class="label">${esc(dateText)}</div></div>`;
 }
-
-async function printTurnThermal(turn){
-  const key=`${turn.category_code}-${turn.number}`;
-  if(printedTurns.has(key)) return {ok:true,duplicate:true};
-  printedTurns.add(key);
-  try{
-    const printer=await ensureQz();
-    const cfg=qz.configs.create(printer,{copies:1,jobName:`Turno ${key}`,encoding:'CP858'});
-    const data=[{type:'raw',format:'command',flavor:'plain',data:buildEscPos(turn)}];
-    await qz.print(cfg,data);
-    return {ok:true,method:'qz',printer};
-  }catch(err){
-    printedTurns.delete(key);
-    throw new Error(`Impresión automática falló: ${err?.message||err}`);
-  }
+function printTurnBrowser(turn){
+  return new Promise(resolve=>{
+    buildPrintTicket(turn);
+    const cleanup=()=>{window.removeEventListener('afterprint',cleanup);setTimeout(()=>{document.getElementById('ticketPrint').innerHTML='';resolve(true)},150)};
+    window.addEventListener('afterprint',cleanup);
+    setTimeout(()=>window.print(),120);
+  });
 }
-
-async function checkPrinter(){
-  try{
-    const printer=await ensureQz();
-    toast(`QZ Tray conectado. Impresora: ${printer}`);
-    return printer;
-  }catch(e){
-    toast(e.message||'No se pudo conectar con QZ Tray');
-    return null;
-  }
-}
-
-async function listThermalPrinters(){
-  try{
-    await ensureQz();
-    const list=await qz.printers.find();
-    alert('Impresoras detectadas:\n\n'+(list||[]).join('\n'));
-  }catch(e){ alert(e.message||'No se pudieron consultar las impresoras'); }
-}
-
-async function testThermalPrinter(){
-  try{
-    const result=await printTurnThermal({category_code:'PRUEBA',number:'001'});
-    toast(`Prueba enviada a ${result.printer}`);
-  }catch(e){toast(e.message||'No se pudo probar la impresora');}
-}
-
-function renderKiosk(){
-  app.innerHTML=nav('kiosco')+`<main class="wrap"><div class="section-head"><div><h1>Toma de turno</h1><p class="muted">Selecciona el servicio que necesitas.</p></div><div class="actions"><button class="btn secondary" onclick="checkPrinter()">Conectar impresora</button><button class="btn secondary" onclick="testThermalPrinter()">Imprimir prueba</button><button class="btn secondary" onclick="listThermalPrinters()">Ver impresoras</button><button class="btn secondary" onclick="location.hash='tv'">Ver pantalla TV</button></div></div><section class="panel" style="margin-bottom:14px"><div class="small-note"><strong>Impresión automática:</strong> para imprimir directamente en una térmica de 58 mm sin mostrar el cuadro del navegador, instala <strong>QZ Tray</strong>, sirve esta aplicación por <strong>HTTP/HTTPS</strong> (no abras el archivo con <code>file://</code>) y coloca en <code>assets/qz/</code> el certificado y la clave de firma generados por QZ Tray.</div></section><section class="panel"><div id="kioskCats" class="grid grid-3"><div class="muted">Cargando categorías…</div></div></section></main>`;loadKiosk();
-}
-async function loadKiosk(){try{const d=await rpc('public_categories',{});const box=document.getElementById('kioskCats');box.innerHTML=(d||[]).map(c=>`<button class="panel" style="text-align:left;border:2px solid #eadff6" onclick="issuePublicTurn('${esc(c.code)}')"><div style="font-size:34px;font-weight:1000;color:var(--purple)">${esc(c.code)}</div><div style="font-weight:900">${esc(c.name)}</div><div class="small-note">Tocar para tomar turno</div></button>`).join('')||'<div class="muted">No hay categorías activas.</div>'}catch(e){document.getElementById('kioskCats').innerHTML='<div class="muted">No se pudieron cargar las categorías.</div>'}}
-async function issuePublicTurn(code){try{const r=await rpc('issue_turn',{p_code:code});toast(`Turno generado: ${r.category_code} ${r.number}`);try{await printTurnThermal(r)}catch(printErr){toast(printErr.message||'Turno generado, pero no se pudo imprimir')} }catch(e){toast(e.message||'No fue posible generar el turno')}}
+async function issuePublicTurn(code){try{const r=await rpc('issue_turn',{p_code:code});toast(`Turno generado: ${r.category_code} ${r.number}`);await printTurnBrowser(r);}catch(e){toast(e.message||'No fue posible generar el turno')}}
 
 function renderAdvisor(){const s=sessionGet('advisor');if(!s){renderAdvisorLogin();return}app.innerHTML=nav('asesor')+`<main class="advisor-call"><section class="panel advisor-card"><div class="section-head"><div><h1>Módulo ${esc(s.module_number)}</h1><p class="muted">${esc(s.name)} · ${s.mode==='exclusive'?'Categoría exclusiva':'Atención aleatoria'}</p></div><button class="btn secondary" onclick="advisorLogout()">Salir</button></div><div class="current"><div>Último llamado</div><div id="advisorCurrent" class="t">—</div><div id="advisorCurrentM" class="m">Módulo ${esc(s.module_number)}</div></div><div class="two-buttons"><button class="btn ok" onclick="callNext(true)">Llamar siguiente de mi categoría</button><button class="btn" onclick="callNext(false)">Llamar siguiente de cualquier categoría</button></div><p class="small-note" style="margin-top:12px">El turno se reserva de forma segura en Supabase para evitar que dos módulos llamen el mismo turno.</p><div id="advisorMsg" class="small-note"></div></section></main>`;pollAdvisor();setInterval(pollAdvisor,1800)}
 function renderAdvisorLogin(){app.innerHTML=nav('asesor')+`<main class="login"><section class="panel login-card"><h2>Acceso asesor / módulo</h2><p class="muted">Usa el número de módulo y la contraseña de 4 dígitos creada por el administrador.</p><form id="advisorLogin"><div class="field"><label>Módulo</label><input id="advMod" inputmode="text" required></div><div class="field"><label>Contraseña</label><input id="advPass" type="password" inputmode="numeric" maxlength="4" pattern="\\d{4}" required></div><button class="btn" style="width:100%">Entrar</button></form></section></main>`;document.getElementById('advisorLogin').onsubmit=async e=>{e.preventDefault();try{const r=await rpc('login_agent',{p_module_number:document.getElementById('advMod').value.trim(),p_password:document.getElementById('advPass').value.trim()});sessionSet('advisor',r);toast('Acceso correcto');renderAdvisor()}catch(err){toast('Módulo o contraseña no válidos')}}}
