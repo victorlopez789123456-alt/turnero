@@ -146,17 +146,46 @@ function hexToBase64(hex){
 }
 
 async function ensureQz(){
-  if(!window.qz) throw new Error('QZ Tray no está cargado. Comprueba tu conexión a Internet o usa una copia local de qz-tray.js.');
-  if(location.protocol === 'file:') throw new Error('El archivo está abierto como file://. Sirve la app por HTTP/HTTPS, por ejemplo http://localhost:8080/index.html. QZ Tray 2.2.x bloquea la impresión desde orígenes file://.');
+  if(!window.qz) throw new Error('QZ Tray no está cargado. Comprueba que QZ Tray esté instalado y ejecutándose.');
+  if(location.protocol === 'file:') throw new Error('No abras el HTML con doble clic. Inicia el servidor local y abre http://localhost:8080/.');
   configureQzSecurity();
   if(!qzReadyPromise){
     qzReadyPromise = (async()=>{
       if(!qz.websocket.isActive()){
-        const opts = location.protocol === 'https:' ? {usingSecure:true} : {usingSecure:false};
-        await qz.websocket.connect(opts);
+        // Primero probamos WSS. Esto evita el bloqueo de Chrome 147+ a websockets
+        // inseguros (ws://) hacia localhost/otras direcciones privadas.
+        try {
+          if(qz.api && qz.api.showDebug) qz.api.showDebug(true);
+          await qz.websocket.connect({
+            host: 'localhost',
+            usingSecure: true,
+            retries: 3,
+            delay: 1
+          });
+        } catch(secureErr){
+          // Respaldo para instalaciones antiguas que solo exponen ws://.
+          try {
+            await qz.websocket.connect({
+              host: 'localhost',
+              usingSecure: false,
+              retries: 2,
+              delay: 1
+            });
+          } catch(insecureErr){
+            const a = secureErr?.message || String(secureErr);
+            const b = insecureErr?.message || String(insecureErr);
+            throw new Error(
+              'No se pudo conectar con QZ Tray. ' +
+              'Intento seguro: ' + a + ' | Intento HTTP: ' + b +
+              '. Verifica que QZ Tray esté ejecutándose y que el navegador permita localhost.'
+            );
+          }
+        }
       }
+      const info = qz.websocket.getConnectionInfo ? qz.websocket.getConnectionInfo() : null;
       qzPrinterName = THERMAL_PRINTER_NAME.trim() || await qz.printers.getDefault();
       if(!qzPrinterName) throw new Error('QZ Tray está conectado pero no hay impresora predeterminada.');
+      if(info) console.info('QZ Tray conectado:', info);
       return qzPrinterName;
     })().catch(err=>{qzReadyPromise=null;throw err;});
   }
